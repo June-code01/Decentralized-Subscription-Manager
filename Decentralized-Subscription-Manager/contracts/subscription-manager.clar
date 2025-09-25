@@ -243,3 +243,64 @@
     
     (ok (map-set subscriptions subscription-key
       (merge subscription { active: true })))))
+
+(define-public (process-payment (subscriber principal) (service-id uint))
+  (let ((subscription-key {subscriber: subscriber, service-id: service-id})
+        (subscription (unwrap! (map-get? subscriptions subscription-key) err-not-found))
+        (service (unwrap! (map-get? services service-id) err-not-found))
+        (platform-fee (/ (* (get amount subscription) platform-fee-rate) u10000))
+        (provider-amount (- (get amount subscription) platform-fee))
+        (grace-deadline (+ (get next-payment subscription) (get grace-period subscription))))
+    
+    ;; Validation
+    (asserts! (not (var-get contract-paused)) err-unauthorized)
+    (asserts! (get active subscription) err-subscription-inactive)
+    (asserts! (get active service) err-service-inactive)
+    (asserts! (>= block-height (get next-payment subscription)) err-payment-not-due)
+    (asserts! (<= block-height grace-deadline) err-subscription-expired)
+    (asserts! (>= (stx-get-balance subscriber) (get amount subscription)) err-insufficient-balance)
+    
+    ;; Process payment
+    (try! (stx-transfer? provider-amount subscriber (get provider subscription)))
+    (try! (stx-transfer? platform-fee subscriber (var-get platform-fee-recipient)))
+    
+    ;; Update subscription
+    (map-set subscriptions subscription-key
+      (merge subscription {
+        last-payment: block-height,
+        next-payment: (+ block-height (get interval subscription)),
+        total-payments: (+ (get total-payments subscription) u1)
+      }))
+    
+    ;; Update service stats
+    (map-set services service-id
+      (merge service {
+        total-revenue: (+ (get total-revenue service) (get amount subscription))
+      }))
+    
+    ;; Update provider stats
+    (update-provider-stats (get provider subscription) u0 u0 (get amount subscription))
+    
+    ;; Update platform stats
+    (update-platform-stats u0 u0 (get amount subscription))
+    (var-set total-platform-fees (+ (var-get total-platform-fees) platform-fee))
+    
+    (ok true)))
+
+(define-public (batch-process-payments (subscribers-services (list 50 { subscriber: principal, service-id: uint })))
+  (let ((results (map process-single-payment subscribers-services)))
+    (ok results)))
+
+(define-private (process-single-payment (sub-service { subscriber: principal, service-id: uint }))
+  (process-payment (get subscriber sub-service) (get service-id sub-service)))
+
+(define-public (withdraw-earnings (amount uint))
+  (let ((caller tx-sender)
+        (provider-earnings (get-provider-earnings caller)))
+    
+    (asserts! (>= provider-earnings amount) err-insufficient-balance)
+    (asserts! (> amount u0) err-invalid-price)
+    
+    ;; This would require implementing an earnings tracking system
+    ;; For now, returning success as a placeholder
+    (ok true)))
