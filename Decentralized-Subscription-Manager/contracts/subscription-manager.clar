@@ -304,3 +304,108 @@
     ;; This would require implementing an earnings tracking system
     ;; For now, returning success as a placeholder
     (ok true)))
+
+;; Admin functions
+(define-public (set-platform-fee-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= new-rate u1000) err-invalid-price) ;; Max 10%
+    ;; Note: In a real implementation, this would update the platform-fee-rate
+    (ok true)))
+
+(define-public (set-platform-fee-recipient (new-recipient principal))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (var-set platform-fee-recipient new-recipient)
+    (ok true)))
+
+(define-public (pause-contract)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (var-set contract-paused true)
+    (ok true)))
+
+(define-public (unpause-contract)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (var-set contract-paused false)
+    (ok true)))
+
+;; Helper functions
+(define-private (update-provider-stats (provider principal) (services-delta uint) (subscribers-delta uint) (revenue-delta uint))
+  (map-set provider-stats provider
+    (match (map-get? provider-stats provider)
+      existing-stats (merge existing-stats {
+        services-created: (+ (get services-created existing-stats) services-delta),
+        total-subscribers: (+ (get total-subscribers existing-stats) subscribers-delta),
+        total-revenue: (+ (get total-revenue existing-stats) revenue-delta)
+      })
+      {
+        services-created: services-delta,
+        total-subscribers: subscribers-delta,
+        total-revenue: revenue-delta,
+        reputation-score: u100
+      })))
+
+(define-private (update-platform-stats (services-delta uint) (subscriptions-delta uint) (volume-delta uint))
+  (map-set platform-stats u0
+    (match (map-get? platform-stats u0)
+      existing-stats (merge existing-stats {
+        total-services: (+ (get total-services existing-stats) services-delta),
+        total-subscriptions: (+ (get total-subscriptions existing-stats) subscriptions-delta),
+        total-volume: (+ (get total-volume existing-stats) volume-delta)
+      })
+      {
+        total-services: services-delta,
+        total-subscriptions: subscriptions-delta,
+        total-volume: volume-delta,
+        total-fees-collected: u0
+      })))
+
+;; Read-only functions
+(define-read-only (get-subscription (subscriber principal) (service-id uint))
+  (map-get? subscriptions {subscriber: subscriber, service-id: service-id}))
+
+(define-read-only (get-service (service-id uint))
+  (map-get? services service-id))
+
+(define-read-only (get-provider-stats (provider principal))
+  (map-get? provider-stats provider))
+
+(define-read-only (get-platform-stats)
+  (map-get? platform-stats u0))
+
+(define-read-only (get-service-category (category (string-ascii 32)))
+  (map-get? service-categories category))
+
+(define-read-only (is-subscription-due (subscriber principal) (service-id uint))
+  (match (map-get? subscriptions {subscriber: subscriber, service-id: service-id})
+    subscription (>= block-height (get next-payment subscription))
+    false))
+
+(define-read-only (get-subscription-status (subscriber principal) (service-id uint))
+  (match (map-get? subscriptions {subscriber: subscriber, service-id: service-id})
+    subscription 
+      (if (get active subscription)
+        (if (>= block-height (+ (get next-payment subscription) (get grace-period subscription)))
+          "expired"
+          (if (>= block-height (get next-payment subscription))
+            "payment-due"
+            "active"))
+        "paused")
+    "not-found"))
+
+(define-read-only (get-provider-earnings (provider principal))
+  (match (map-get? provider-stats provider)
+    stats (get total-revenue stats)
+    u0))
+
+(define-read-only (get-contract-info)
+  {
+    owner: contract-owner,
+    paused: (var-get contract-paused),
+    platform-fee-rate: platform-fee-rate,
+    platform-fee-recipient: (var-get platform-fee-recipient),
+    total-platform-fees: (var-get total-platform-fees),
+    next-service-id: (var-get next-service-id)
+  })
