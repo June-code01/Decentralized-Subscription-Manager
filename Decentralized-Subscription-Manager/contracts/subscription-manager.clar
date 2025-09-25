@@ -158,3 +158,88 @@
       (merge service {
         active: (not (get active service))
       })))))
+
+(define-public (subscribe-to-service (service-id uint) (grace-period uint))
+  (let ((caller tx-sender)
+        (service (unwrap! (map-get? services service-id) err-not-found))
+        (subscription-key {subscriber: caller, service-id: service-id})
+        (platform-fee (/ (* (get price service) platform-fee-rate) u10000))
+        (provider-amount (- (get price service) platform-fee)))
+    
+    ;; Validation
+    (asserts! (not (var-get contract-paused)) err-unauthorized)
+    (asserts! (get active service) err-service-inactive)
+    (asserts! (is-none (map-get? subscriptions subscription-key)) err-already-exists)
+    (asserts! (>= (stx-get-balance caller) (get price service)) err-insufficient-balance)
+    (asserts! (<= grace-period (get interval service)) err-invalid-interval)
+    
+    ;; Process payment
+    (try! (stx-transfer? provider-amount caller (get provider service)))
+    (try! (stx-transfer? platform-fee caller (var-get platform-fee-recipient)))
+    
+    ;; Create subscription
+    (map-set subscriptions subscription-key {
+      provider: (get provider service),
+      amount: (get price service),
+      interval: (get interval service),
+      last-payment: block-height,
+      next-payment: (+ block-height (get interval service)),
+      active: true,
+      created-at: block-height,
+      total-payments: u1,
+      grace-period: grace-period
+    })
+    
+    ;; Update service stats
+    (map-set services service-id
+      (merge service {
+        subscriber-count: (+ (get subscriber-count service) u1),
+        total-revenue: (+ (get total-revenue service) (get price service))
+      }))
+    
+    ;; Update provider stats
+    (update-provider-stats (get provider service) u0 u1 (get price service))
+    
+    ;; Update platform stats
+    (update-platform-stats u0 u1 (get price service))
+    (var-set total-platform-fees (+ (var-get total-platform-fees) platform-fee))
+    
+    (ok true)))
+
+(define-public (cancel-subscription (service-id uint))
+  (let ((caller tx-sender)
+        (subscription-key {subscriber: caller, service-id: service-id})
+        (subscription (unwrap! (map-get? subscriptions subscription-key) err-not-found))
+        (service (unwrap! (map-get? services service-id) err-not-found)))
+    
+    ;; Update service subscriber count
+    (map-set services service-id
+      (merge service {
+        subscriber-count: (- (get subscriber-count service) u1)
+      }))
+    
+    ;; Update provider stats
+    (update-provider-stats (get provider subscription) u0 u1 u0)
+    
+    ;; Remove subscription
+    (ok (map-delete subscriptions subscription-key))))
+
+(define-public (pause-subscription (service-id uint))
+  (let ((caller tx-sender)
+        (subscription-key {subscriber: caller, service-id: service-id})
+        (subscription (unwrap! (map-get? subscriptions subscription-key) err-not-found)))
+    
+    (asserts! (get active subscription) err-subscription-inactive)
+    
+    (ok (map-set subscriptions subscription-key
+      (merge subscription { active: false })))))
+
+(define-public (resume-subscription (service-id uint))
+  (let ((caller tx-sender)
+        (subscription-key {subscriber: caller, service-id: service-id})
+        (subscription (unwrap! (map-get? subscriptions subscription-key) err-not-found)))
+    
+    (asserts! (not (get active subscription)) err-already-exists)
+    
+    (ok (map-set subscriptions subscription-key
+      (merge subscription { active: true })))))
