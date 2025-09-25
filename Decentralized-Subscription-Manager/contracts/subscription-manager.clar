@@ -106,7 +106,7 @@
       price: price,
       interval: interval,
       active: true,
-      created-at: block-height,
+      created-at: stacks-block-height,
       subscriber-count: u0,
       total-revenue: u0,
       category: category
@@ -182,10 +182,10 @@
       provider: (get provider service),
       amount: (get price service),
       interval: (get interval service),
-      last-payment: block-height,
-      next-payment: (+ block-height (get interval service)),
+      last-payment: stacks-block-height,
+      next-payment: (+ stacks-block-height (get interval service)),
       active: true,
-      created-at: block-height,
+      created-at: stacks-block-height,
       total-payments: u1,
       grace-period: grace-period
     })
@@ -256,8 +256,8 @@
     (asserts! (not (var-get contract-paused)) err-unauthorized)
     (asserts! (get active subscription) err-subscription-inactive)
     (asserts! (get active service) err-service-inactive)
-    (asserts! (>= block-height (get next-payment subscription)) err-payment-not-due)
-    (asserts! (<= block-height grace-deadline) err-subscription-expired)
+    (asserts! (>= stacks-block-height (get next-payment subscription)) err-payment-not-due)
+    (asserts! (<= stacks-block-height grace-deadline) err-subscription-expired)
     (asserts! (>= (stx-get-balance subscriber) (get amount subscription)) err-insufficient-balance)
     
     ;; Process payment
@@ -267,8 +267,8 @@
     ;; Update subscription
     (map-set subscriptions subscription-key
       (merge subscription {
-        last-payment: block-height,
-        next-payment: (+ block-height (get interval subscription)),
+        last-payment: stacks-block-height,
+        next-payment: (+ stacks-block-height (get interval subscription)),
         total-payments: (+ (get total-payments subscription) u1)
       }))
     
@@ -380,16 +380,16 @@
 
 (define-read-only (is-subscription-due (subscriber principal) (service-id uint))
   (match (map-get? subscriptions {subscriber: subscriber, service-id: service-id})
-    subscription (>= block-height (get next-payment subscription))
+    subscription (>= stacks-block-height (get next-payment subscription))
     false))
 
 (define-read-only (get-subscription-status (subscriber principal) (service-id uint))
   (match (map-get? subscriptions {subscriber: subscriber, service-id: service-id})
     subscription 
       (if (get active subscription)
-        (if (>= block-height (+ (get next-payment subscription) (get grace-period subscription)))
+        (if (>= stacks-block-height (+ (get next-payment subscription) (get grace-period subscription)))
           "expired"
-          (if (>= block-height (get next-payment subscription))
+          (if (>= stacks-block-height (get next-payment subscription))
             "payment-due"
             "active"))
         "paused")
