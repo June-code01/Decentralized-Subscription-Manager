@@ -80,3 +80,81 @@
 (define-data-var platform-fee-recipient principal contract-owner)
 (define-data-var contract-paused bool false)
 (define-data-var total-platform-fees uint u0)
+
+
+(define-public (create-service 
+  (name (string-ascii 64))
+  (description (string-ascii 256))
+  (price uint)
+  (interval uint)
+  (category (string-ascii 32)))
+  (let ((service-id (var-get next-service-id))
+        (caller tx-sender))
+    
+    ;; Validation
+    (asserts! (not (var-get contract-paused)) err-unauthorized)
+    (asserts! (> price u0) err-invalid-price)
+    (asserts! (and (>= interval min-subscription-interval) 
+                   (<= interval max-subscription-interval)) err-invalid-interval)
+    (asserts! (> (len name) u0) err-invalid-price)
+    
+    ;; Create service
+    (map-set services service-id {
+      provider: caller,
+      name: name,
+      description: description,
+      price: price,
+      interval: interval,
+      active: true,
+      created-at: block-height,
+      subscriber-count: u0,
+      total-revenue: u0,
+      category: category
+    })
+    
+    ;; Update category
+    (map-set service-categories category
+      (match (map-get? service-categories category)
+        existing-cat (merge existing-cat { count: (+ (get count existing-cat) u1) })
+        { count: u1, active: true }))
+    
+    ;; Update provider stats
+    (update-provider-stats caller u1 u0 u0)
+    
+    ;; Update next service ID
+    (var-set next-service-id (+ service-id u1))
+    
+    ;; Update platform stats
+    (update-platform-stats u1 u0 u0)
+    
+    (ok service-id)))
+
+(define-public (update-service 
+  (service-id uint)
+  (name (string-ascii 64))
+  (description (string-ascii 256))
+  (price uint))
+  (let ((caller tx-sender)
+        (service (unwrap! (map-get? services service-id) err-not-found)))
+    
+    (asserts! (is-eq caller (get provider service)) err-unauthorized)
+    (asserts! (> price u0) err-invalid-price)
+    (asserts! (> (len name) u0) err-invalid-price)
+    
+    (ok (map-set services service-id
+      (merge service {
+        name: name,
+        description: description,
+        price: price
+      })))))
+
+(define-public (toggle-service-status (service-id uint))
+  (let ((caller tx-sender)
+        (service (unwrap! (map-get? services service-id) err-not-found)))
+    
+    (asserts! (is-eq caller (get provider service)) err-unauthorized)
+    
+    (ok (map-set services service-id
+      (merge service {
+        active: (not (get active service))
+      })))))
